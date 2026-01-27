@@ -64,6 +64,9 @@ async def universal_cors_middleware(request: Request, call_next):
 
 
 
+@app.get("/api/health")
+async def health():
+    return {"status": "ok"}
 
 @app.get("/docs")
 async def get_docs():
