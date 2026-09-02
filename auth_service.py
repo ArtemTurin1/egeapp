@@ -1,53 +1,84 @@
+"""
+OAuth авторизация — логин или регистрация пользователя с выдачей JWT токена.
+"""
+
+from typing import Optional, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from models import User
 from fastapi import HTTPException
-import os
+from datetime import datetime, timezone
+from config import get_logger
+from dependencies import create_access_token
 
-FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173')
+logger = get_logger(__name__)
 
 
 class OAuthLoginRequest:
-    def __init__(self, email: str, name: str, auth_type: str,
-                 yandex_id: str = None, telegram_id: int = None,
-                 telegram_username: str = None):
+    def __init__(
+        self,
+        email: str,
+        name: str,
+        auth_type: str,
+        telegram_id: Optional[int] = None,
+        telegram_username: Optional[str] = None,
+    ):
         self.email = email
         self.name = name
         self.auth_type = auth_type
-        self.yandex_id = yandex_id
         self.telegram_id = telegram_id
         self.telegram_username = telegram_username
 
 
-async def oauth_login_or_register(data, db: AsyncSession):
-    """Логин или регистрация через OAuth"""
+async def oauth_login_or_register(data: OAuthLoginRequest, db: AsyncSession) -> Dict[str, Any]:
+    """Логин или регистрация через OAuth с выдачей JWT-токена."""
     try:
-        # Ищем пользователя по email
-        result = await db.execute(select(User).where(User.email == data.email))
-        user = result.scalars().first()
+        # Поиск по email или telegram_id
+        user = None
+        if data.telegram_id:
+            result = await db.execute(select(User).where(User.telegram_id == data.telegram_id))
+            user = result.scalars().first()
+
+        if not user:
+            result = await db.execute(select(User).where(User.email == data.email))
+            user = result.scalars().first()
 
         if user:
-            # Пользователь существует
-            print(f"✅ Пользователь существует: {user.email}")
+            # Обновляем при необходимости недостающие поля
+            updated = False
+            if data.telegram_id and not user.telegram_id:
+                user.telegram_id = data.telegram_id
+                user.telegram_username = data.telegram_username
+                updated = True
+            if updated:
+                await db.commit()
+                await db.refresh(user)
+
+            logger.info("✅ Пользователь вошел через OAuth: %s", user.email)
+            token = create_access_token({"sub": str(user.id), "email": user.email})
             return {
-                "id": user.id,
-                "email": user.email,
-                "name": user.name,
-                "auth_type": user.auth_type,
-                "message": "✅ Вы успешно вошли"
+                "access_token": token,
+                "token_type": "bearer",
+                "user": {
+                    "id": user.id,
+                    "email": user.email,
+                    "name": user.name,
+                    "is_mentor": user.is_mentor,
+                    "auth_type": user.auth_type,
+                },
+                "message": "✅ Вы успешно вошли",
             }
 
         # Создаём нового пользователя через OAuth
         user = User(
             email=data.email,
-            name=data.name,
+            name=data.name or "Пользователь",
             auth_type=data.auth_type,
-            password_hash=None,  # Нет пароля для OAuth
+            password_hash=None,
+            created_at=datetime.now(timezone.utc),
         )
 
-        if data.auth_type == 'yandex' and data.yandex_id:
-            user.yandex_id = data.yandex_id
-        elif data.auth_type == 'telegram' and data.telegram_id:
+        if data.auth_type == "telegram" and data.telegram_id:
             user.telegram_id = data.telegram_id
             user.telegram_username = data.telegram_username
 
@@ -55,16 +86,21 @@ async def oauth_login_or_register(data, db: AsyncSession):
         await db.commit()
         await db.refresh(user)
 
-        print(f"✅ Новый пользователь создан: {user.email} ({data.auth_type})")
+        logger.info("✅ Новый пользователь создан через OAuth: %s (%s)", user.email, data.auth_type)
+        token = create_access_token({"sub": str(user.id), "email": user.email})
         return {
-            "id": user.id,
-            "email": user.email,
-            "name": user.name,
-            "auth_type": user.auth_type,
-            "message": "✅ Аккаунт создан и вы вошли"
+            "access_token": token,
+            "token_type": "bearer",
+            "user": {
+                "id": user.id,
+                "email": user.email,
+                "name": user.name,
+                "is_mentor": user.is_mentor,
+                "auth_type": user.auth_type,
+            },
+            "message": "✅ Аккаунт создан и вы вошли",
         }
-
     except Exception as e:
         await db.rollback()
-        print(f"❌ Ошибка OAuth: {str(e)}")
-        raise HTTPException(status_code=500, detail=f'❌ Ошибка: {str(e)}')
+        logger.error("❌ Ошибка OAuth: %s", e)
+        raise HTTPException(status_code=500, detail=f"❌ Ошибка OAuth: {e}")
