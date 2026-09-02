@@ -10,10 +10,17 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- База данных ---
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql+asyncpg://postgres:postgres@localhost:5432/app_bd",
-)
+# 1. Сначала пробуем взять публичный URL (нужен, если alembic запускается извне)
+# 2. Если его нет, берем внутренний URL Railway
+DATABASE_URL = os.getenv("DATABASE_PUBLIC_URL") or os.getenv("DATABASE_URL")
+
+if not DATABASE_URL:
+    raise ValueError("Критическая ошибка: Переменная окружения DATABASE_URL не найдена!")
+
+# Автоматически меняем протокол для асинхронной работы с asyncpg
+if DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
+
 
 # --- JWT Аутентификация ---
 JWT_SECRET_KEY = os.getenv(
