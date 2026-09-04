@@ -10,7 +10,8 @@ from config import get_logger
 logger = get_logger(__name__)
 router = APIRouter(prefix="/api/upload", tags=["upload"])
 
-UPLOAD_DIR = Path("static/uploads")
+BASE_DIR = Path(__file__).resolve().parent.parent
+UPLOAD_DIR = BASE_DIR / "static" / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 @router.post("/")
@@ -18,12 +19,16 @@ async def upload_file(file: UploadFile = File(...), user: User = Depends(get_cur
     """Загрузка файла (картинка, документ) на сервер."""
     try:
         # Генерируем уникальное имя файла
-        ext = os.path.splitext(file.filename)[1]
+        ext = os.path.splitext(file.filename or "")[1].lower()
+        if not ext:
+            ext = ".jpg"
         unique_filename = f"{uuid.uuid4().hex}{ext}"
         file_path = UPLOAD_DIR / unique_filename
 
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
+
+        logger.info(f"Файл успешно сохранен: {file_path} ({file.filename})")
 
         # Возвращаем URL-путь к файлу
         file_url = f"/static/uploads/{unique_filename}"

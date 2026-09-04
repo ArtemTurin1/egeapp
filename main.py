@@ -19,8 +19,15 @@ from models import (
 from bot import run_bot_polling
 from routers import auth, profile, homework, upload, webhook, schedule
 import os
+from pathlib import Path
 
 logger = get_logger(__name__)
+
+# Директория со статическими файлами
+BASE_DIR = Path(__file__).resolve().parent
+STATIC_DIR = BASE_DIR / "static"
+UPLOAD_DIR = STATIC_DIR / "uploads"
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ============================================================================
@@ -36,7 +43,7 @@ async def lifespan(app: FastAPI):
         logger.info("✅ База данных инициализирована")
         
         # Создаем директорию для загрузок, если её нет
-        os.makedirs("static/uploads", exist_ok=True)
+        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
         
         # Запуск Telegram-бота в фоне
         bot_task = asyncio.create_task(run_bot_polling())
@@ -87,7 +94,7 @@ app.add_middleware(
 
 
 # ---------- Статические файлы ----------
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # ---------- Request Logging Middleware ----------
 

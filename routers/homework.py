@@ -4,6 +4,7 @@
 """
 
 import json
+import html
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,11 +25,128 @@ from schemas import (
     StudentHomeworkSubmitRequest,
     HomeworkReviewRequest
 )
+import httpx
 from dependencies import get_db, get_current_user
-from config import get_logger
+from config import TELEGRAM_BOT_TOKEN, TELEGRAM_PROXY, FRONTEND_URL, get_logger
 
 logger = get_logger(__name__)
 router = APIRouter(tags=["homework"])
+
+
+async def send_tg_homework_notification(
+    telegram_id: int,
+    homework_title: str,
+    mentor_name: str,
+    description: str = "",
+) -> bool:
+    """Отправка уведомления ученику в Telegram о новом назначенном ДЗ."""
+    if not TELEGRAM_BOT_TOKEN or not telegram_id:
+        return False
+
+    title_safe = html.escape(homework_title or "Без названия")
+    mentor_safe = html.escape(mentor_name or "Преподаватель")
+
+    desc_clean = (description or "").strip()
+    if len(desc_clean) > 250:
+        desc_clean = desc_clean[:250] + "..."
+    desc_safe = html.escape(desc_clean)
+    desc_section = f"\n\n📝 <b>Задание:</b>\n<i>{desc_safe}</i>" if desc_safe else ""
+
+    text = (
+        f"📚 <b>Вам назначено новое домашнее задание!</b>\n\n"
+        f"📌 <b>Тема:</b> {title_safe}\n"
+        f"👨‍🏫 <b>Преподаватель:</b> {mentor_safe}"
+        f"{desc_section}\n\n"
+        f"👉 <i>Зайдите на платформу, чтобы посмотреть материалы и сдать работу!</i> 🚀"
+    )
+
+    payload = {
+        "chat_id": telegram_id,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }
+    if FRONTEND_URL:
+        payload["reply_markup"] = {
+            "inline_keyboard": [
+                [{"text": "📖 Открыть ДЗ на платформе", "url": f"{FRONTEND_URL}/homework"}]
+            ]
+        }
+
+    try:
+        proxy_arg = TELEGRAM_PROXY if TELEGRAM_PROXY else None
+        async with httpx.AsyncClient(timeout=10.0, proxy=proxy_arg) as client:
+            resp = await client.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                json=payload,
+            )
+            if resp.status_code != 200:
+                logger.error("Ошибка Telegram API (ученик %s): status=%s body=%s", telegram_id, resp.status_code, resp.text)
+                return False
+            return True
+    except Exception as e:
+        logger.error("Ошибка отправки Telegram-уведомления о ДЗ (ученик %s): %s", telegram_id, e)
+        return False
+
+
+async def send_tg_homework_submitted_notification(
+    telegram_id: int,
+    homework_title: str,
+    student_name: str,
+    student_comment: str = "",
+    attachments_count: int = 0,
+) -> bool:
+    """Отправка уведомления учителю в Telegram о том, что ученик сдал ДЗ."""
+    if not TELEGRAM_BOT_TOKEN or not telegram_id:
+        return False
+
+    title_safe = html.escape(homework_title or "Без названия")
+    student_safe = html.escape(student_name or "Ученик")
+
+    comment_clean = (student_comment or "").strip()
+    if len(comment_clean) > 250:
+        comment_clean = comment_clean[:250] + "..."
+    comment_safe = html.escape(comment_clean)
+    comment_section = f"\n\n💬 <b>Комментарий ученика:</b>\n<i>{comment_safe}</i>" if comment_safe else ""
+
+    attach_text = f"\n📎 <b>Прикреплено файлов / фото:</b> {attachments_count}" if attachments_count > 0 else ""
+
+    text = (
+        f"✅ <b>Ученик сдал домашнее задание!</b>\n\n"
+        f"👤 <b>Ученик:</b> {student_safe}\n"
+        f"📌 <b>Тема задания:</b> {title_safe}"
+        f"{comment_section}"
+        f"{attach_text}\n\n"
+        f"👉 <i>Проверьте работу ученика на платформе!</i> 🎯"
+    )
+
+    payload = {
+        "chat_id": telegram_id,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }
+    if FRONTEND_URL:
+        payload["reply_markup"] = {
+            "inline_keyboard": [
+                [{"text": "👀 Посмотреть работу на платформе", "url": f"{FRONTEND_URL}/homework"}]
+            ]
+        }
+
+    try:
+        proxy_arg = TELEGRAM_PROXY if TELEGRAM_PROXY else None
+        async with httpx.AsyncClient(timeout=10.0, proxy=proxy_arg) as client:
+            resp = await client.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                json=payload,
+            )
+            if resp.status_code != 200:
+                logger.error("Ошибка Telegram API (учитель %s): status=%s body=%s", telegram_id, resp.status_code, resp.text)
+                return False
+            return True
+    except Exception as e:
+        logger.error("Ошибка отправки Telegram-уведомления учителю (учитель %s): %s", telegram_id, e)
+        return False
 
 
 # ---------- Наставники и ученики ----------
@@ -122,9 +240,22 @@ async def get_my_students(
         .where(MentorStudent.mentor_id == current_user.id)
     )
     students = result.scalars().all()
+    def clean_email(u: User):
+        if u.auth_type == "telegram" or (u.email and (u.email.endswith("@kogdaurok.local") or u.email.startswith("telegram_"))):
+            return None
+        return u.email
+
     return {
         "students": [
-            {"id": s.id, "name": s.name or "Пользователь", "email": s.email} for s in students
+            {
+                "id": s.id,
+                "name": s.name or "Пользователь",
+                "email": clean_email(s),
+                "telegram_username": s.telegram_username,
+                "has_telegram": bool(s.telegram_id),
+                "auth_type": s.auth_type,
+            }
+            for s in students
         ]
     }
 
@@ -141,9 +272,22 @@ async def get_my_mentors(
         .where(MentorStudent.student_id == current_user.id)
     )
     mentors = result.scalars().all()
+
+    def clean_email(u: User):
+        if u.auth_type == "telegram" or (u.email and (u.email.endswith("@kogdaurok.local") or u.email.startswith("telegram_"))):
+            return None
+        return u.email
+
     return {
         "mentors": [
-            {"id": m.id, "name": m.name or "Наставник", "email": m.email} for m in mentors
+            {
+                "id": m.id,
+                "name": m.name or "Наставник",
+                "email": clean_email(m),
+                "telegram_username": m.telegram_username,
+                "auth_type": m.auth_type,
+            }
+            for m in mentors
         ]
     }
 
@@ -194,6 +338,10 @@ async def assign_homework(
         raise HTTPException(status_code=404, detail="ДЗ не найдено")
 
     created = 0
+    notified_count = 0
+    no_tg_count = 0
+    mentor_display_name = current_user.name or (current_user.telegram_username and f"@{current_user.telegram_username}") or "Преподаватель"
+
     for student_id in data.student_ids:
         # Проверяем что он ученик этого ментора
         relation = await db.scalar(
@@ -205,26 +353,47 @@ async def assign_homework(
             continue
 
         # Проверяем нет ли уже назначенного
-        exists = await db.scalar(
-            select(func.count(StudentHomework.id)).where(
+        existing_sh = await db.scalar(
+            select(StudentHomework).where(
                 and_(StudentHomework.homework_id == homework_id, StudentHomework.student_id == student_id)
             )
         )
-        if exists:
-            continue
-
-        db.add(
-            StudentHomework(
-                homework_id=homework.id,
-                student_id=student_id,
-                status="pending",
-                assigned_at=datetime.now(timezone.utc),
+        if not existing_sh:
+            db.add(
+                StudentHomework(
+                    homework_id=homework.id,
+                    student_id=student_id,
+                    status="pending",
+                    assigned_at=datetime.now(timezone.utc),
+                )
             )
-        )
-        created += 1
+            created += 1
+
+        # Отправляем уведомление в Telegram ученику, если у него привязан Telegram
+        try:
+            student_res = await db.execute(select(User).where(User.id == student_id))
+            student_user = student_res.scalars().first()
+            if student_user and student_user.telegram_id:
+                notified = await send_tg_homework_notification(
+                    telegram_id=student_user.telegram_id,
+                    homework_title=homework.title,
+                    mentor_name=mentor_display_name,
+                    description=homework.description or "",
+                )
+                if notified:
+                    notified_count += 1
+            else:
+                no_tg_count += 1
+        except Exception as e:
+            logger.error("Не удалось отправить TG-уведомление ученику %s: %s", student_id, e)
 
     await db.commit()
-    return {"success": True, "students_assigned": created}
+    return {
+        "success": True,
+        "students_assigned": created,
+        "notified_count": notified_count,
+        "no_tg_count": no_tg_count,
+    }
 
 
 # ---------- Просмотр ДЗ ----------
@@ -380,16 +549,21 @@ async def submit_student_homework(
 ):
     """Сдача домашнего задания учеником."""
     result = await db.execute(
-        select(StudentHomework).where(
+        select(StudentHomework, Homework, User)
+        .join(Homework, Homework.id == StudentHomework.homework_id)
+        .join(User, User.id == Homework.mentor_id)
+        .where(
             and_(
                 StudentHomework.id == student_homework_id,
                 StudentHomework.student_id == current_user.id,
             )
         )
     )
-    item = result.scalars().first()
-    if not item:
+    row = result.first()
+    if not row:
         raise HTTPException(status_code=404, detail="Домашнее задание не найдено")
+
+    item, homework, mentor = row
 
     item.student_comment = data.student_comment
     item.student_attachments = json.dumps(data.student_attachments)
@@ -397,7 +571,34 @@ async def submit_student_homework(
     item.completed_at = datetime.now(timezone.utc)
     
     await db.commit()
-    return {"success": True, "message": "Домашнее задание сдано"}
+
+    # Отправляем уведомление наставнику в Telegram
+    notified_mentor = False
+    if mentor and mentor.telegram_id:
+        try:
+            student_display_name = (
+                current_user.name
+                or (current_user.telegram_username and f"@{current_user.telegram_username}")
+                or current_user.email
+                or "Ученик"
+            )
+            attachments_count = len(data.student_attachments) if data.student_attachments else 0
+            notified_mentor = await send_tg_homework_submitted_notification(
+                telegram_id=mentor.telegram_id,
+                homework_title=homework.title,
+                student_name=student_display_name,
+                student_comment=data.student_comment or "",
+                attachments_count=attachments_count,
+            )
+            logger.info("Уведомление наставнику %s отправлено: %s", mentor.id, notified_mentor)
+        except Exception as e:
+            logger.error("Ошибка при отправке TG-уведомления наставнику %s: %s", mentor.id, e)
+
+    return {
+        "success": True,
+        "message": "Домашнее задание сдано",
+        "mentor_notified": notified_mentor,
+    }
 
 
 @router.post("/api/homework/review/{student_homework_id}")
