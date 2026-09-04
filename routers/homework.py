@@ -8,7 +8,7 @@ import html
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, func
+from sqlalchemy import select, and_, func, delete
 from datetime import datetime, timezone
 
 from models import (
@@ -638,3 +638,74 @@ async def review_homework(
     
     await db.commit()
     return {"success": True, "message": "Статус обновлен"}
+
+
+# ---------- Удаление ДЗ и отмена назначения ученика ----------
+
+@router.delete("/api/homework/{homework_id}")
+async def delete_homework(
+    homework_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Удалить домашнее задание (для наставника)."""
+    if not current_user.is_mentor:
+        raise HTTPException(status_code=403, detail="Доступно только наставнику")
+
+    result = await db.execute(
+        select(Homework).where(
+            and_(Homework.id == homework_id, Homework.mentor_id == current_user.id)
+        )
+    )
+    homework = result.scalars().first()
+    if not homework:
+        raise HTTPException(status_code=404, detail="Домашнее задание не найдено")
+
+    # Удаляем все назначения данного ДЗ ученикам
+    await db.execute(
+        delete(StudentHomework).where(StudentHomework.homework_id == homework_id)
+    )
+    # Удаляем само ДЗ
+    await db.delete(homework)
+    await db.commit()
+
+    return {"success": True, "message": "Домашнее задание удалено"}
+
+
+@router.delete("/api/homework/{homework_id}/assign/{student_id}")
+async def unassign_student_homework(
+    homework_id: int,
+    student_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Отменить назначение ДЗ конкретному ученику."""
+    if not current_user.is_mentor:
+        raise HTTPException(status_code=403, detail="Доступно только наставнику")
+
+    result = await db.execute(
+        select(Homework).where(
+            and_(Homework.id == homework_id, Homework.mentor_id == current_user.id)
+        )
+    )
+    homework = result.scalars().first()
+    if not homework:
+        raise HTTPException(status_code=404, detail="Домашнее задание не найдено")
+
+    sh_result = await db.execute(
+        select(StudentHomework).where(
+            and_(
+                StudentHomework.homework_id == homework_id,
+                StudentHomework.student_id == student_id,
+            )
+        )
+    )
+    student_homework = sh_result.scalars().first()
+    if not student_homework:
+        raise HTTPException(status_code=404, detail="Назначение ученика не найдено")
+
+    await db.delete(student_homework)
+    await db.commit()
+
+    return {"success": True, "message": "Назначение ученика отменено"}
+

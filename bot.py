@@ -72,7 +72,6 @@ async def check_and_send_lesson_reminders(client: httpx.AsyncClient):
                         f"👨‍🏫 <b>Наставник:</b> {mentor.name if mentor else 'Преподаватель'}\n"
                         f"👨‍🎓 <b>Ученик:</b> {student.name if student else 'Ученик'}"
                         f"{link_text}\n\n"
-                        f"Пожалуйста, подготовьте материалы к началу занятия."
                     )
                     if student and student.telegram_id:
                         await send_message(client, student.telegram_id, text)
@@ -92,7 +91,6 @@ async def check_and_send_lesson_reminders(client: httpx.AsyncClient):
                         f"📚 <b>Тема:</b> {lesson.title} ({lesson.subject})\n"
                         f"🕒 <b>Время:</b> {time_str}"
                         f"{link_text}\n\n"
-                        f"🚀 Приготовьтесь к подключению!"
                     )
                     if student and student.telegram_id:
                         await send_message(client, student.telegram_id, text_urgent)

@@ -75,3 +75,30 @@ async def test_mentor_and_homework_flow(client, test_mentor_and_student):
     assert details_data["homework"]["students_completed"] == 1
     assert details_data["students"][0]["status"] == "completed"
     assert details_data["students"][0]["student_comment"] == "Все задачи решены, ответы проверены."
+
+    # 8. Наставник отменяет назначение у ученика
+    unassign_resp = await client.delete(
+        f"/api/homework/{hw_id}/assign/{student['id']}",
+        headers=mentor["headers"],
+    )
+    assert unassign_resp.status_code == 200
+    assert unassign_resp.json()["success"] is True
+
+    # Проверяем, что у ученика нет этого ДЗ
+    student_hw_resp_after = await client.get("/api/homework/student", headers=student["headers"])
+    assert student_hw_resp_after.status_code == 200
+    assert not any(item["homework_id"] == hw_id for item in student_hw_resp_after.json()["items"])
+
+    # 9. Наставник удаляет ДЗ
+    delete_hw_resp = await client.delete(
+        f"/api/homework/{hw_id}",
+        headers=mentor["headers"],
+    )
+    assert delete_hw_resp.status_code == 200
+    assert delete_hw_resp.json()["success"] is True
+
+    # Проверяем, что в списке ДЗ у наставника задание отсутствует
+    mentor_hw_list = await client.get("/api/homework/mentor", headers=mentor["headers"])
+    assert mentor_hw_list.status_code == 200
+    assert not any(item["homework_id"] == hw_id for item in mentor_hw_list.json()["items"])
+
