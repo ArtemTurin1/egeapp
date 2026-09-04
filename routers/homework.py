@@ -66,12 +66,6 @@ async def send_tg_homework_notification(
         "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }
-    if FRONTEND_URL:
-        payload["reply_markup"] = {
-            "inline_keyboard": [
-                [{"text": "📖 Открыть ДЗ на платформе", "url": f"{FRONTEND_URL}/homework"}]
-            ]
-        }
 
     try:
         proxy_arg = TELEGRAM_PROXY if TELEGRAM_PROXY else None
@@ -126,12 +120,6 @@ async def send_tg_homework_submitted_notification(
         "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }
-    if FRONTEND_URL:
-        payload["reply_markup"] = {
-            "inline_keyboard": [
-                [{"text": "👀 Посмотреть работу на платформе", "url": f"{FRONTEND_URL}/homework"}]
-            ]
-        }
 
     try:
         proxy_arg = TELEGRAM_PROXY if TELEGRAM_PROXY else None
