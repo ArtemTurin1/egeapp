@@ -294,7 +294,7 @@ async def handle_role_switch(client: httpx.AsyncClient, chat_id: int):
 async def handle_profile(client: httpx.AsyncClient, chat_id: int, first_name: str):
     """Обработка кнопки «👤 Мой профиль» или команды /profile."""
     user = await get_user_by_telegram_id(chat_id)
-    url = FRONTEND_URL.rstrip("/")
+    url = "https://egefront.vercel.app/#/profile"
 
     if user:
         role = "👨‍🏫 Наставник (Учитель)" if user.is_mentor else "👨‍🎓 Ученик"
@@ -302,10 +302,9 @@ async def handle_profile(client: httpx.AsyncClient, chat_id: int, first_name: st
         text = (
             f"👤 <b>Ваш профиль в КогдаУрок:</b>\n\n"
             f"🏷 <b>Имя:</b> {user.name or 'Не указано'}\n"
-            f"📧 <b>Email:</b> {user.email}\n"
             f"🎭 <b>Роль:</b> {role}\n"
             f"📅 <b>Дата регистрации:</b> {reg_date}\n\n"
-            f"💡 <i>Чтобы сменить роль на {'Ученика' if user.is_mentor else 'Наставника'}, нажмите кнопку «🔄 Сменить роль».</i>\n\n"
+            f"💡 Чтобы сменить роль на {'Ученика' if user.is_mentor else 'Наставника'}, нажмите кнопку «🔄 Сменить роль».\n\n"
             f"🌐 <b>Перейти в личный кабинет:</b> <a href=\"{url}/profile\">{url}/profile</a>"
         )
     else:
